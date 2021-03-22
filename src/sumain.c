@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2015-2018 Kristofer Berggren
  * All rights reserved.
- * 
+ *
  * stackusage is distributed under the BSD 3-Clause license, see LICENSE for details.
  *
  */
@@ -49,6 +49,11 @@
                             su_name, getpid(), __FUNCTION__, __LINE__)
 #define SU_LOG_WARN  SU_LOG("%s (pid %d): %s:%d warning\n", \
                             su_name, getpid(), __FUNCTION__, __LINE__)
+#define SU_LOG_EXIT(tid)  SU_LOG("%s (pid %d, tid %d): %s:%d exiting \n", \
+                            su_name, getpid(), tid, __FUNCTION__, __LINE__)
+#define SU_LOG_START(tid)  SU_LOG("%s (pid %d, tid %d): %s:%d starting \n", \
+                            su_name, getpid(), tid, __FUNCTION__, __LINE__)
+
 
 
 /* ----------- Types --------------------------------------------- */
@@ -67,6 +72,7 @@ typedef enum
 
 typedef struct su_threadinfo_s
 {
+  int active;
   int id;
   su_threadtype_t threadtype;
   pthread_t pthread;
@@ -102,7 +108,7 @@ static void su_get_env(void);
 static int su_get_stack_growth(char *stack_addr);
 
 static void su_get_stack_usage(struct su_threadinfo_s *threadinfo);
-static void su_log_stack_usage(void);
+static void su_log_stack_usage(int);
 
 
 /* ----------- File Global Variables ----------------------------- */
@@ -121,6 +127,9 @@ static pthread_mutex_t threadinfo_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_key_t threadkey;
 
 
+static size_t su_stack_total = 0;
+
+
 /* ----------- Global Functions ---------------------------------- */
 void __attribute__ ((constructor)) su_init(void)
 {
@@ -137,7 +146,7 @@ void __attribute__ ((constructor)) su_init(void)
     {
       signal(su_log_signo, signal_handler);
     }
-    
+
     /* Store initialization state */
     su_inited = 1;
   }
@@ -152,7 +161,7 @@ void __attribute__ ((destructor)) su_fini(void)
     su_thread_fini(NULL);
 
     /* Log stack usage in process */
-    su_log_stack_usage();
+    su_log_stack_usage(1);
 
     /* Store initialization state */
     su_inited = 0;
@@ -164,7 +173,7 @@ void signal_handler(int num)
 {
   (void)num;
   /* Log stack usage */
-  su_log_stack_usage();
+  su_log_stack_usage(1);
 }
 
 
@@ -279,7 +288,7 @@ static void su_thread_init(su_threadtype_t threadtype, pthread_attr_t *rattr,
                            void *func_ptr)
 {
   struct su_threadinfo_s *threadinfo = NULL;
-  
+
   threadinfo = calloc(sizeof(struct su_threadinfo_s), 1);
   if(threadinfo == NULL)
   {
@@ -370,7 +379,10 @@ static void su_thread_init(su_threadtype_t threadtype, pthread_attr_t *rattr,
 #ifdef __linux__
   threadinfo->tid = syscall(SYS_gettid);
 #endif
-  
+
+  threadinfo->active = 1;
+  SU_LOG_START(threadinfo->tid);
+
   /* Get current/actual stack attributes */
 #ifdef __APPLE__
   threadinfo->stack_addr = pthread_get_stackaddr_np(threadinfo->pthread);
@@ -498,51 +510,72 @@ static void su_thread_init(su_threadtype_t threadtype, pthread_attr_t *rattr,
     threadinfo->id = threadinfo_it->id + 1;
     threadinfo_it->next = threadinfo;
   }
+
+  su_log_stack_usage(0);
   pthread_mutex_unlock(&threadinfo_mx);
 }
 
-
-static void su_log_stack_usage(void)
+static void su_log_stack_usage(int doLock)
 {
   struct su_threadinfo_s *threadinfo_it = NULL;
-  pthread_mutex_lock(&threadinfo_mx);
+  if (doLock)
+  {
+    pthread_mutex_lock(&threadinfo_mx);
+  }
   threadinfo_it = threadinfo_head;
 
   char timestamp[20];
   time_t t = time(NULL);
   struct tm tm = *localtime(&t);
+  size_t stack_current = 0;
+
   snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-  SU_LOG("%s log at %s ----------------------------------------\n",
-         su_name, timestamp);
-  SU_LOG("  pid  id    tid  requested     actual     maxuse  max%%    dur"
-         "               funcP name\n");
+  //SU_LOG("%s log at %s ----------------------------------------\n",         su_name, timestamp);
+  // SU_LOG("  active   pid    id    tid  requested     actual     maxuse  max%%    dur               funcP name\n");
   while(threadinfo_it)
   {
-    int usage_percent = 0;
-    if(threadinfo_it->stack_req_size > 0)
+    if (threadinfo_it->active > 0)
     {
-      usage_percent =
-        (int) (threadinfo_it->stack_max_usage * 100) /
-        (int) threadinfo_it->stack_req_size;
-    }
+        /*
+        int usage_percent = 0;
+        if(threadinfo_it->stack_req_size > 0)
+        {
+          usage_percent =
+            (int) (threadinfo_it->stack_max_usage * 100) /
+            (int) threadinfo_it->stack_req_size;
+        }
 
-    SU_LOG("%5d %3d  %5d  %9d  %9d  %9d   %3d  %5d  %18p %s\n",
-           getpid(),
-           threadinfo_it->id, 
-           threadinfo_it->tid,
-           (int) threadinfo_it->stack_req_size,
-           (int) threadinfo_it->stack_size,
-           (int) threadinfo_it->stack_max_usage,
-           (int) usage_percent,
-           threadinfo_it->time_duration,
-           threadinfo_it->func_ptr,
-           threadinfo_it->thread_name
-          );
+        SU_LOG("%6d %5d   %3d  %5d  %9d  %9d  %9d   %3d  %5d  %18p %s\n",
+               threadinfo_it->active,
+               getpid(),
+               threadinfo_it->id,
+               threadinfo_it->tid,
+               (int) threadinfo_it->stack_req_size,
+               (int) threadinfo_it->stack_size,
+               (int) threadinfo_it->stack_max_usage,
+               (int) usage_percent,
+               threadinfo_it->time_duration,
+               threadinfo_it->func_ptr,
+               threadinfo_it->thread_name
+              );*/
+
+              stack_current += threadinfo_it->stack_max_usage;
+    }
 
     threadinfo_it = threadinfo_it->next;
   }
-  pthread_mutex_unlock(&threadinfo_mx);
+
+  if (su_stack_total < stack_current)
+  {
+      su_stack_total = stack_current;
+  }
+  SU_LOG("%s;STACK CURRENT;%ld;STACK TOTAL;%ld\n", timestamp, stack_current, su_stack_total);
+
+  if (doLock)
+  {
+    pthread_mutex_unlock(&threadinfo_mx);
+  }
 }
 
 
@@ -582,7 +615,7 @@ static void su_get_stack_usage(struct su_threadinfo_s *threadinfo)
 static struct su_threadinfo_s *su_get_threadinfo_by_pthread(pthread_t pthread)
 {
   struct su_threadinfo_s *threadinfo = NULL;
-  pthread_mutex_lock(&threadinfo_mx);
+  //pthread_mutex_lock(&threadinfo_mx);
   if(threadinfo_head)
   {
     struct su_threadinfo_s *threadinfo_it = threadinfo_head;
@@ -596,7 +629,7 @@ static struct su_threadinfo_s *su_get_threadinfo_by_pthread(pthread_t pthread)
       threadinfo_it = threadinfo_it->next;
     }
   }
-  pthread_mutex_unlock(&threadinfo_mx);
+  //pthread_mutex_unlock(&threadinfo_mx);
   return threadinfo;
 }
 
@@ -605,9 +638,11 @@ static void su_thread_fini(void *key)
 {
   /* Find current thread in list */
   struct su_threadinfo_s *threadinfo = NULL;
-  threadinfo = su_get_threadinfo_by_pthread(pthread_self());
 
   pthread_mutex_lock(&threadinfo_mx);
+
+  threadinfo = su_get_threadinfo_by_pthread(pthread_self());
+
 
   /* Update its stack usage info */
   su_get_stack_usage(threadinfo);
@@ -618,8 +653,13 @@ static void su_thread_fini(void *key)
   /* Store stop time and calculate duration */
   if(time(&(threadinfo->time_stop)) != ((time_t)-1))
   {
-    threadinfo->time_duration = threadinfo->time_stop -
-      threadinfo->time_start;
+    threadinfo->time_duration = threadinfo->time_stop - threadinfo->time_start;
+
+    SU_LOG_EXIT(threadinfo->tid);
+    threadinfo->active = 2;
+    su_log_stack_usage(0);
+    threadinfo->active = 0;
+    threadinfo->pthread = 0;
   }
   else
   {
