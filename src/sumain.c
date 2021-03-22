@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2015-2018 Kristofer Berggren
  * All rights reserved.
- * 
+ *
  * stackusage is distributed under the BSD 3-Clause license, see LICENSE for details.
  *
  */
@@ -137,7 +137,7 @@ void __attribute__ ((constructor)) su_init(void)
     {
       signal(su_log_signo, signal_handler);
     }
-    
+
     /* Store initialization state */
     su_inited = 1;
   }
@@ -279,7 +279,7 @@ static void su_thread_init(su_threadtype_t threadtype, pthread_attr_t *rattr,
                            void *func_ptr)
 {
   struct su_threadinfo_s *threadinfo = NULL;
-  
+
   threadinfo = calloc(sizeof(struct su_threadinfo_s), 1);
   if(threadinfo == NULL)
   {
@@ -370,7 +370,7 @@ static void su_thread_init(su_threadtype_t threadtype, pthread_attr_t *rattr,
 #ifdef __linux__
   threadinfo->tid = syscall(SYS_gettid);
 #endif
-  
+
   /* Get current/actual stack attributes */
 #ifdef __APPLE__
   threadinfo->stack_addr = pthread_get_stackaddr_np(threadinfo->pthread);
@@ -529,7 +529,7 @@ static void su_log_stack_usage(void)
 
     SU_LOG("%5d %3d  %5d  %9d  %9d  %9d   %3d  %5d  %18p %s\n",
            getpid(),
-           threadinfo_it->id, 
+           threadinfo_it->id,
            threadinfo_it->tid,
            (int) threadinfo_it->stack_req_size,
            (int) threadinfo_it->stack_size,
@@ -625,6 +625,8 @@ static void su_thread_fini(void *key)
   {
     SU_LOG_WARN;
   }
+
+  threadinfo->pthread = 0;
 
   if(key)
   {
